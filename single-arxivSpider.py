@@ -10,13 +10,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import argparse
 import itertools
-# from fake_useragent import UserAgent
 from concurrent.futures import as_completed
 from bs4 import BeautifulSoup
 import copy
-
-# 创建一个用户代理池
-# ua = UserAgent()
 
 # 创建一个Session对象
 session = requests.Session()
@@ -71,13 +67,15 @@ def crawl(pid, file_type, headers=None):
                 if pdf_url is None:
                     continue
                 resp = session.get(pdf_url, timeout=30)
+                # time.sleep(1)  # 如果爬太快被反爬，就把这一行的注释去掉
             else:
                 resp = session.get(url, timeout=30)
+                # time.sleep(1)  # 如果爬太快被反爬，就把这一行的注释去掉
             for i in range(retry_times):
                 if resp.status_code == 200:
                     break
                 resp = session.get(url, headers=headers, timeout=30)
-                # time.sleep(2)  # 如果爬太快被反爬，就把这一行的注释去掉
+                time.sleep(2)  # 如果爬太快被反爬，就把这一行的注释去掉
             return resp, has_source
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Connection error: {e}, URL: {url}")
@@ -91,25 +89,21 @@ def crawl(pid, file_type, headers=None):
 
 
 def download_files(j, out_folder):
-    global done_set
     pid = j['id']
-    if pid in done_set:
-        return
+
     if out_folder is None:
         out_folder = "download"
-    
-    pdf_url = None
-    source_url = None
-    
+
     # 生成输出目录
-    pdf_out_folder = os.path.join(out_folder, pid.replace('/', '_'),'pdf') # 带有replace的部分是因为有的pid里存在 '/' 符号
+    pdf_out_folder = os.path.join(out_folder, pid.replace('/', '_'),'pdf') 
+    # 带有replace的部分是因为有的pid里存在 '/' 符号
     source_out_folder = os.path.join(out_folder, pid.replace('/','_'), 'source') 
     pdf_out_path = os.path.join(pdf_out_folder, pid.replace('/','_')+'.pdf')
-    # ↓↓↓↓↓↓↓↓↓↓↓↓↓ ABOUT SOURCE FILE ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓:
     source_out_path = os.path.join(source_out_folder, pid.replace('/','_'))
     # Delivered as a gzipped tar (.tar.gz) file if there are multiple files, 
     # otherwise as a PDF file, or a gzipped TeX, DVI, PostScript or HTML (
     # .gz, .dvi.gz, .ps.gz or .html.gz) file depending on submission format.
+    
     # 检查文件是否已经下载
     if os.path.exists(pdf_out_path) and os.path.exists(source_out_path):
         logger.info(f'Files {pid} already downloaded, skip.')
@@ -129,7 +123,6 @@ def download_files(j, out_folder):
     
     if pdf_status == 200:
         os.makedirs(pdf_out_folder, exist_ok=True)
-        pdf_url = pdf_resp.url  # 记录下载的PDF文件的URL
         with open(pdf_out_path, 'wb')as wb: wb.write(pdf_resp.content)
         logger.info(f"Successfully downloaded PDF file {pid}")  
     else: 
@@ -137,7 +130,6 @@ def download_files(j, out_folder):
         logger.error(f"Failed to download PDF file {pid}")
     if source_status == 200:
         os.makedirs(source_out_folder, exist_ok=True)
-        source_url = source_resp.url  # 记录下载的源文件的URL
         with open(source_out_path, 'wb')as wb: wb.write(source_resp.content)
         logger.info(f"Successfully downloaded source file {pid}")
     elif source_status is not None:
@@ -145,25 +137,7 @@ def download_files(j, out_folder):
         logger.error(f"Failed to download source file {pid}")
 
     if pdf_out_path == '' or source_out_path == '':
-        logger.warning(f'{pid} {pdf_status} {source_status}')
-
-    # 保存下载记录
-    save_info = dict()
-    save_info['id'] = pid
-    save_info['arxiv_url'] = 'https://arxiv.org/abs/' + pid
-    save_info['title'] = j['title']
-    save_info['autorhs'] = j.get('authors_parsed', False) or j['authors']
-    save_info['paper_time'] = j['update_date']
-    save_info['download_time'] = time.strftime('%Y-%m-%d')
-    save_info['pdf_path'] = pdf_out_path
-    save_info['source_path'] = source_out_path
-    save_info['pdf_url'] = pdf_url  # 添加PDF文件的URL
-    save_info['source_url'] = source_url  # 添加源文件的URL
-    save_info['pdf_status'] = pdf_status
-    save_info['source_status'] = source_status
-    with jsonlines.open(log_file, mode='a') as writer:
-        writer.write(save_info)
-    done_set.add(pid)
+        logger.warning(f'{pid} {pdf_status} {source_status} | Can not found.')
 
 def worker(obj, out_folder):
     try:
@@ -174,8 +148,6 @@ def worker(obj, out_folder):
         logger.error(f"Requests proxy error: {obj['id']}")
     except Exception as e:
         logger.error(f"Other exception: {obj['id']}\n\t{e}\n\t{traceback.format_exc()}")
-    # finally:
-    #     t_counter -= 1
 
 def main():
     all_counter = 0
@@ -189,18 +161,17 @@ def main():
         read_iter = itertools.islice(read_iter, max_files)
     
     for obj in tqdm(read_iter, ncols=100, desc='完成进度'):
-        if obj['id'] not in done_set:
-            try:
-                worker(obj, out_folder)
-            except ConnectionResetError:
-                logger.error(f"Connection reset error: {obj['id']}")
-            except requests.exceptions.ProxyError:
-                logger.error(f"Requests proxy error: {obj['id']}")
-            except Exception as e:
-                logger.error(f"Other exception: {obj['id']}\n\t{e}\n\t{traceback.format_exc()}")
-            all_counter += 1 
-            if all_counter % log_interval == 0:
-                logger.info(f'已获取{all_counter}篇论文。')
+        try:
+            worker(obj, out_folder)
+        except ConnectionResetError:
+            logger.error(f"Connection reset error: {obj['id']}")
+        except requests.exceptions.ProxyError:
+            logger.error(f"Requests proxy error: {obj['id']}")
+        except Exception as e:
+            logger.error(f"Other exception: {obj['id']}\n\t{e}\n\t{traceback.format_exc()}")
+        all_counter += 1 
+        if all_counter % log_interval == 0:
+            logger.info(f'已获取{all_counter}篇论文。')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -216,8 +187,6 @@ if __name__ == '__main__':
         os.makedirs(log_dir)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     
-    log_file = f'./{log_dir}/spider_log.jsonl'  
-    # log_file = f'./{log_dir}/spider_log_{timestamp}.jsonl'  
     error_log_file = f'./{log_dir}/error_log_{timestamp}.log'  
     
     meta_file = args.meta_file  # 存储arxiv论文元信息的文件地址
@@ -227,12 +196,5 @@ if __name__ == '__main__':
     out_folder = args.out_folder  # 下载的文件夹位置
     
     logger.add(error_log_file, rotation="500 MB")  # 使用loguru记录日志
-    
-    done_set = set()
-    # 检查已经爬取过的文件，避免重复爬取
-    if os.path.exists(log_file):
-        with jsonlines.open(log_file)as reader:
-            for obj in reader:
-                done_set.add(obj['id'])
     
     main()

@@ -1,0 +1,8 @@
+loguru
+requests
+jsonlines
+tqdm
+concurrent.futures
+argparse
+itertools
+fake_useragent
